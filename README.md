@@ -1,39 +1,72 @@
-# Fix a security problem the AI agent got wrong
+# Claims Search: fix for MYT-3108 (SQL injection)
 
-You are a developer on a team that fixes security problems in an old health-benefits website.
-An AI agent already tried to fix security problem **MYT-3108** (SQL injection in the claims search)
-in `src/Claims/ClaimsRepository.cs`. Its tests pass. Your job: check its work, fix what is wrong,
-and prove it. You may use your AI tool; we will watch how you use it.
+A small C# (.NET 8) project that simulates the claims search of a health-benefits website.
+It was used to practice reviewing and fixing a security fix made by an AI agent.
 
-## Files
+## What the program does
 
-- `FINDING.md`: the problem, and how the search must behave.
-- `AGENT_NOTES.md`: what the agent says it did, and the code before its change.
-- `src/Claims/ClaimsRepository.cs`: the code after the agent's change. You change this file.
-- `tests/Claims.Tests/`: the agent's tests and `MyTests.cs` for yours.
+`ClaimsRepository.Search` (in `src/Claims/ClaimsRepository.cs`) searches the claims of **one member**:
 
-## Start
+- Returns only the claims of the given member.
+- Finds claims whose description **or** provider **contains** the text, in any case
+  (`dental` finds "Dental cleaning" and "Dental X-ray").
+- Supports names with apostrophes (`O'Brien` finds "O'Brien Eye Clinic").
+- Sorts by `date`, `amount` or `status` (`sortBy`), in `asc` or `desc` order (`sortDir`).
+  Any other `sortBy` is rejected with `ArgumentException`.
+- Paginates at 20 results per page (`page` starts at 0; a negative value throws `ArgumentOutOfRangeException`).
+
+Sample data comes from an in-memory SQLite database (`Db.CreateSeeded`). In production the database is SQL Server.
+
+## The problem (MYT-3108)
+
+The original search built its SQL by joining the search text and the sort option into the query.
+Searching for `' OR 1=1 --` returned the claims of **other members** (SQL injection, CWE-89).
+
+An AI agent tried to fix it, but its fix was wrong:
+
+| Problem in the agent's fix | Consequence |
+|---|---|
+| `sortBy` was still joined into the SQL (it only removed quotes and `;`) | Still injectable, for example `amount, (SELECT name FROM members)` |
+| It removed apostrophes from the search text | `O'Brien` was no longer found |
+| It changed the search to exact match | Broke the partial search the product needs |
+| The test `Search_ExactMatchOnly_BlocksWildcardEnumeration` protected the wrong behavior | It fails as soon as the search is fixed |
+
+## What was fixed
+
+- **Sorting:** a fixed list of options (`date`, `amount`, `status`) mapped to fixed column names.
+  No user input reaches the SQL text.
+- **Search:** the text goes only as a parameter, with nothing removed, using a partial `LIKE`.
+  The characters `\`, `%`, `_` and `[` typed by the user are escaped (`ESCAPE '\'`), so `100%` is matched literally.
+- **Pagination:** a negative `page` is rejected before it reaches the database.
+- **Tests:** the agent's exact-match test was replaced by a partial-match test.
+  `MyTests.cs` adds tests that pass on the fixed code and fail on the agent's version.
+
+More details in `NOTES.md`.
+
+## Layout
+
+- `FINDING.md`: the problem and the rules for how the search must behave.
+- `AGENT_NOTES.md`: what the agent says it did, and the original code.
+- `src/Claims/`: the code (`ClaimsRepository.cs` and `Db.cs`).
+- `tests/Claims.Tests/`: the agent's tests (`AgentTests.cs`) and the new tests (`MyTests.cs`).
+- `check/`: program that scores the fix (do not edit).
+- `NOTES.md`: what the agent proposed, what changed, and the evidence.
+
+## How to run
+
+Tests:
 
 ```
 dotnet test tests/Claims.Tests
 ```
 
-## Tasks: 15 minutes in total (any order)
-
-1. **Sorting (about 5 minutes).** Make the sort option safe: only the options in `FINDING.md` work,
-   anything else is rejected with `ArgumentException`.
-2. **Search (about 4 minutes).** Make the search behave as `FINDING.md` describes, without
-   reopening the injection.
-3. **Your tests (about 4 minutes).** In `MyTests.cs`, write at least two tests that pass on your
-   code and would fail on the agent's version.
-4. **Notes (about 2 minutes).** Fill in `NOTES.md`: what the agent proposed, what you changed and
-   why, and your evidence.
-
-If you are still on one task two minutes after its time, move to the next one.
-At 15 minutes we stop. Then run:
+Scoring check:
 
 ```
 dotnet run --project check
 ```
 
-Do not edit the `check` folder.
+## Caveat
+
+The tests run on SQLite. Since production uses SQL Server, validate `LIKE ... ESCAPE` there,
+including the escaping of `[` (a character-set wildcard in SQL Server) and the collation's case sensitivity.

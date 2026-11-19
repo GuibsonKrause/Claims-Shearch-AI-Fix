@@ -26,9 +26,9 @@ public class AgentTests
     }
 
     [Fact]
-    public void Search_ExactMatchOnly_BlocksWildcardEnumeration()
+    public void Search_PartialMatch_IsRequiredByProduct()
     {
-        // Partial matches are blocked, so nobody can list claims by guessing a few letters.
-        Assert.Empty(Repo().Search(1, "dental"));
+        // FINDING.md: search is "contains", any case. (Replaces the agent's wrong exact-match test.)
+        Assert.Equal(new long[] { 101, 103 }, Repo().Search(1, "dental").Select(c => c.Id).OrderBy(x => x));
     }
 }
